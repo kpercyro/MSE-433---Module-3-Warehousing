@@ -59,9 +59,4 @@ Both optimizers achieve the same **16.1% makespan improvement** (374s vs 446s). 
 python compare_solutions.py
 ```
 
-This prints a full report to the terminal and writes `comparison_results.csv` with all metrics.
-
-## Team Members
-
-- Jeevan Parmar
-- Kate
+This prints a full report to the terminal and writes `comparison_results.csv` with all metrics.s
