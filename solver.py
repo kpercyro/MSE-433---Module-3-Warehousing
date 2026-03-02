@@ -57,6 +57,8 @@ class SimulationResult:
     avg_completion: float
     completion_times: List[Optional[float]]
     claims: List[Tuple[int, int, float]]  # (conv_num, item_type, time)
+    release_steps: List[Tuple[int, int, int, int, float]]
+    # (global_release_order, tote_id, release_order_in_tote, item_type, release_time)
     dropped_items: int
 
 
@@ -372,6 +374,9 @@ def simulate_solution(
         t_cursor += n_items * params.item_release_interval
 
     claims: List[Tuple[int, int, float]] = []
+    release_steps: List[Tuple[int, int, int, int, float]] = []
+    release_order_in_tote: Dict[int, int] = defaultdict(int)
+    global_release_order = 0
     dropped_items = 0
 
     while events:
@@ -393,6 +398,18 @@ def simulate_solution(
             counts[item] -= 1
             if counts[item] <= 0:
                 del counts[item]
+
+            release_order_in_tote[tote] += 1
+            global_release_order += 1
+            release_steps.append(
+                (
+                    global_release_order,
+                    tote,
+                    release_order_in_tote[tote],
+                    item,
+                    t_now,
+                )
+            )
 
             token = {"item": item, "passes": 0}
             push_event(
@@ -461,6 +478,7 @@ def simulate_solution(
         avg_completion=float(avg_completion),
         completion_times=completion_times,
         claims=claims,
+        release_steps=release_steps,
         dropped_items=dropped_items,
     )
 
@@ -637,6 +655,37 @@ def write_plan_csv(path: str, problem: ProblemInstance, solution: Solution) -> N
                 writer.writerow(row)
 
 
+def write_tote_sequence_csv(
+    path: str, problem: ProblemInstance, solution: Solution
+) -> None:
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["tote_load_order", "tote_id", "items_in_tote"])
+        for load_order, tote_id in enumerate(solution.tote_sequence, start=1):
+            items_in_tote = sum(problem.tote_inventory.get(tote_id, {}).values())
+            writer.writerow([load_order, tote_id, items_in_tote])
+
+
+def write_tote_item_release_csv(
+    path: str, release_steps: Sequence[Tuple[int, int, int, int, float]]
+) -> None:
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "global_release_order",
+                "tote_id",
+                "release_order_in_tote",
+                "shape",
+                "release_time",
+            ]
+        )
+        for global_order, tote_id, in_tote_order, shape, t in release_steps:
+            writer.writerow(
+                [global_order, tote_id, in_tote_order, shape, f"{t:.6f}"]
+            )
+
+
 def resolve_path(base_dir: str, maybe_relative: str) -> str:
     if os.path.isabs(maybe_relative):
         return maybe_relative
@@ -666,6 +715,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-item-passes", type=int, default=200)
 
     parser.add_argument("--output-plan", default="plan.csv")
+    parser.add_argument("--output-tote-sequence", default="tote_sequence.csv")
+    parser.add_argument("--output-tote-items", default="tote_item_release.csv")
     parser.add_argument("--verbose", action="store_true", default=True)
     return parser.parse_args()
 
@@ -678,6 +729,8 @@ def main() -> None:
     orders_totes_path = resolve_path(args.base_dir, args.orders_totes)
 
     output_plan_path = resolve_path(args.base_dir, args.output_plan)
+    output_tote_sequence_path = resolve_path(args.base_dir, args.output_tote_sequence)
+    output_tote_items_path = resolve_path(args.base_dir, args.output_tote_items)
 
     problem = load_problem(
         order_itemtypes_path=order_itemtypes_path,
@@ -704,6 +757,8 @@ def main() -> None:
     )
 
     write_plan_csv(output_plan_path, problem, best_solution)
+    write_tote_sequence_csv(output_tote_sequence_path, problem, best_solution)
+    write_tote_item_release_csv(output_tote_items_path, best_result.release_steps)
 
     print("=== SA Warehouse Solver Summary ===")
     print(f"Orders: {problem.num_orders}")
@@ -714,6 +769,8 @@ def main() -> None:
     print(f"Average completion time: {best_result.avg_completion:.6f}")
     print(f"Dropped items: {best_result.dropped_items}")
     print(f"Plan CSV written to: {output_plan_path}")
+    print(f"Tote sequence CSV written to: {output_tote_sequence_path}")
+    print(f"Tote item release CSV written to: {output_tote_items_path}")
 
 
 if __name__ == "__main__":
