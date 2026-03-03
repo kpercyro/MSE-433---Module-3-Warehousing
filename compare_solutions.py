@@ -659,7 +659,72 @@ def main():
                               for t, q in sorted(demands[o].items()))
             print(f"    {ct:6.0f}s : O{o} ({ototal(demands[o])} items: {items})")
 
-    # -- 7. Export CSV ---------------------------------------------------
+    # -- 7. Actual physical run comparison --------------------------------
+    print(f"\n{'=' * 70}")
+    print("ACTUAL PHYSICAL RUNS vs SIMULATOR")
+    print("=" * 70)
+
+    actual_runs = {
+        "Liam (actual)":   os.path.join(_script_dir, 'grp_3_a_output.csv'),
+        "Jeevan (actual)": os.path.join(_script_dir, 'grp3_b_output.csv'),
+    }
+
+    actual_results = {}
+    for label, path in actual_runs.items():
+        if not os.path.exists(path):
+            print(f"  {label}: file not found ({path})")
+            continue
+        rows = []
+        with open(path, newline='') as f:
+            for row in csv.DictReader(f):
+                rows.append({
+                    'belt': int(row['conv_num']),
+                    'shape': row['shape_name'],
+                    'time': float(row['time']),
+                })
+        rows.sort(key=lambda r: r['time'])
+        makespan = rows[-1]['time'] if rows else 0
+        first_item = rows[0]['time'] if rows else 0
+        n_items = len(rows)
+
+        # Per-belt item counts
+        belt_counts = defaultdict(int)
+        for r in rows:
+            belt_counts[r['belt']] += 1
+
+        actual_results[label] = {
+            'makespan': makespan,
+            'first_item': first_item,
+            'n_items': n_items,
+            'belt_counts': dict(sorted(belt_counts.items())),
+        }
+
+    # Map actual runs to their simulated counterparts
+    sim_map = {
+        "Liam (actual)":   "Liam (SA)",
+        "Jeevan (actual)": "Jeevan (SA)",
+    }
+
+    hdr_act = (f"{'Run':<20s} | {'Items':>5s} | {'Makespan':>10s} | "
+               f"{'Sim Makespan':>12s} | {'Ratio':>6s} | {'Belt Distribution'}")
+    print(f"\n{hdr_act}")
+    print("-" * len(hdr_act) + "-" * 20)
+
+    for label in actual_runs:
+        if label not in actual_results:
+            continue
+        ar = actual_results[label]
+        sim_name = sim_map.get(label, "")
+        sim_ms = results[sim_name]['jeevan']['makespan'] if sim_name in results else 0
+        ratio = sim_ms / ar['makespan'] if ar['makespan'] > 0 else 0
+        belt_str = ", ".join(f"B{b}:{c}" for b, c in ar['belt_counts'].items())
+        print(f"{label:<20s} | {ar['n_items']:>5d} | {ar['makespan']:>9.1f}s | "
+              f"{sim_ms:>11.1f}s | {ratio:>5.2f}x | {belt_str}")
+
+    print(f"\n  Note: actual runs had {total_items} items in problem but delivered "
+          f"fewer (no circles in physical totes)")
+
+    # -- 8. Export CSV ---------------------------------------------------
     csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'comparison_results.csv')
     with open(csv_path, 'w', newline='') as f:

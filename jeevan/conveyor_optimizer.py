@@ -34,15 +34,15 @@ SHAPES = ['circle', 'pentagon', 'trapezoid', 'triangle', 'star', 'moon', 'heart'
 SHAPE_TO_COL = {s: i for i, s in enumerate(SHAPES)}
 NUM_BELTS = 4
 
-# Timing calibrated from example output: 15 items sorted in 213s
-# Gaps between consecutive sorts range from 1.7s to 40s, avg ~14s
-# Items on same belt back-to-back: ~8s
-# Items switching belts: ~14-20s
-# First item delay (startup): ~20s
-T_STARTUP = 20.0
-T_SAME_BELT = 8.0      # consecutive items claimed by same belt
-T_DIFF_BELT = 14.0     # item claimed by different belt than previous
-T_RECIRCULATE = 25.0   # item goes around loop unclaimed
+# Timing calibrated from actual physical runs (seed=100):
+#   Liam run:   30 items in 162.5s  (grp_3_a_output.csv)
+#   Jeevan run: 29 items in 206.1s  (grp3_b_output.csv)
+# Same-belt median gap: ~4.0s, diff-belt median gap: ~4-6s
+# Startup (first item arrival): 13-18s
+T_STARTUP = 11.0
+T_SAME_BELT = 3.5      # consecutive items claimed by same belt
+T_DIFF_BELT = 8.0      # item claimed by different belt than previous
+T_RECIRCULATE = 10.0   # item goes around loop unclaimed
 
 
 # ============================================================
