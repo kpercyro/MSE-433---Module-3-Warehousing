@@ -569,7 +569,7 @@ def gen_csv(belt_queues, demands, filename):
                 rows.append([b + 1] + c)
     with open(filename, 'w', newline='') as f:
         w = csv.writer(f)
-        w.writerow(['conv_num', 'cirle', 'pentagon', 'trapezoid',
+        w.writerow(['conv_num', 'circle', 'pentagon', 'trapezoid',
                      'triangle', 'star', 'moon', 'heart', 'cross'])
         for row in rows:
             w.writerow([f"{row[0]}"] + [f" {v}" for v in row[1:]])

@@ -628,10 +628,9 @@ def write_claims_csv(path: str, claims: Sequence[Tuple[int, int, float]]) -> Non
 
 
 def write_plan_csv(path: str, problem: ProblemInstance, solution: Solution) -> None:
-    # Header must match the example input exactly (including "cirle" typo).
     header = [
         "conv_num",
-        "cirle",
+        "circle",
         "pentagon",
         "trapezoid",
         "triangle",

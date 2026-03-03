@@ -370,7 +370,7 @@ def write_markdown(
 
 # ── Plan CSV writer ───────────────────────────────────────────────────────
 def write_plan_csv(path: str, prob: Problem, queues: List[List[int]]) -> None:
-    header = ["conv_num", "cirle", "pentagon", "trapezoid", "triangle",
+    header = ["conv_num", "circle", "pentagon", "trapezoid", "triangle",
               "star", "moon", "heart", "cross"]
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
