@@ -22,6 +22,7 @@ import random
 import math
 import csv
 import sys
+import os
 import json
 from collections import defaultdict
 from itertools import permutations
@@ -81,6 +82,38 @@ def generate_data(seed=100):
         'n_orders': n_orders, 'n_itemtypes': n_itemtypes, 'n_totes': n_totes,
         'order_itemtypes': order_itemtypes, 'order_quantities': order_quantities,
         'orders_totes': orders_totes, 'seed': seed
+    }
+
+
+def load_data_from_csv(csv_dir):
+    """Load order data from the 3 CSV files produced by the notebook."""
+    def parse_csv(path):
+        rows = []
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                vals = []
+                for v in line.split(','):
+                    v = v.strip()
+                    if v:
+                        vals.append(int(float(v)))
+                rows.append(vals)
+        return rows
+
+    order_itemtypes = parse_csv(os.path.join(csv_dir, 'order_itemtypes.csv'))
+    order_quantities = parse_csv(os.path.join(csv_dir, 'order_quantities.csv'))
+    orders_totes = parse_csv(os.path.join(csv_dir, 'orders_totes.csv'))
+
+    n_orders = len(order_itemtypes)
+    n_itemtypes = max(v for row in order_itemtypes for v in row) + 1
+    n_totes = max(v for row in orders_totes for v in row) + 1
+
+    return {
+        'n_orders': n_orders, 'n_itemtypes': n_itemtypes, 'n_totes': n_totes,
+        'order_itemtypes': order_itemtypes, 'order_quantities': order_quantities,
+        'orders_totes': orders_totes, 'seed': None
     }
 
 
@@ -524,7 +557,7 @@ def gen_csv(belt_queues, demands, filename):
                 for t, q in demands[oi].items():
                     if 0 <= t < 8:
                         c[t] = q
-                rows.append([b] + c)
+                rows.append([b + 1] + c)
     with open(filename, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['conv_num', 'cirle', 'pentagon', 'trapezoid',
@@ -643,18 +676,28 @@ def export_viz_data(data, demands, belt_queues, sim_result, loading_order):
 # ============================================================
 # MAIN
 # ============================================================
-def main(seed=100, outdir='.'):
+def main(seed=100, outdir='.', csv_dir=None):
     print("=" * 65)
     print("MSE433 M3 - Conveyor Belt Optimizer v3 (Complete Solution)")
     print("=" * 65)
     print(f"Seed: {seed}\n")
 
-    # 1. Generate data
-    data = generate_data(seed)
+    # 1. Load data from CSVs if available, else generate
+    csv_source = csv_dir or outdir
+    csv_files = [os.path.join(csv_source, f) for f in
+                 ('order_itemtypes.csv', 'order_quantities.csv', 'orders_totes.csv')]
+    if all(os.path.isfile(f) for f in csv_files):
+        print(f"Loading data from CSV files in {csv_source}/")
+        data = load_data_from_csv(csv_source)
+        data['seed'] = seed
+    else:
+        print("No CSV files found, generating data internally")
+        data = generate_data(seed)
+
     demands = get_demands(data)
     total_items = sum(ototal(d) for d in demands)
 
-    print(f"Generated: {data['n_orders']} orders, {total_items} items, "
+    print(f"Loaded: {data['n_orders']} orders, {total_items} items, "
           f"{data['n_itemtypes']} types, {data['n_totes']} totes\n")
 
     for i in range(data['n_orders']):
