@@ -1,0 +1,37 @@
+============================================================
+TOTE LOADING INSTRUCTIONS
+============================================================
+
+STEP 1: BELT ASSIGNMENTS (enter into conveyor CSV)
+--------------------------------------------------
+  Belt 0 → Order 5: 2x pentagon
+  Belt 1 → Order 10: 1x pentagon
+  Belt 2 → Order 6: 2x triangle, 1x moon
+  Belt 3 → Order 4: 1x pentagon, 1x trapezoid
+
+STEP 2: PICK ITEMS INTO TOTES
+--------------------------------------------------
+  Tote 1: 2x pentagon, 3x heart
+  Tote 3: 1x moon
+  Tote 10: 1x pentagon, 1x moon
+  Tote 11: 1x pentagon
+  Tote 12: 1x trapezoid
+  Tote 13: 2x pentagon, 2x triangle, 1x moon
+
+STEP 3: LOAD ITEMS ONTO RAMP (in this order!)
+--------------------------------------------------
+    1. Load 1x pentagon     → (for Belt 0)
+    2. Load 1x pentagon     → (for Belt 1)
+    3. Load 1x triangle     → (for Belt 2)
+    4. Load 1x pentagon     → (for Belt 3)
+    5. Load 1x pentagon     → (for Belt 0)
+    6. Load 1x triangle     → (for Belt 2)
+    7. Load 1x trapezoid    → (for Belt 3)
+    8. Load 1x moon         → (for Belt 2)
+
+STEP 4: OBSERVE AND RECORD
+--------------------------------------------------
+  - Do NOT touch items once on conveyor
+  - Record which items get sorted to which belt
+  - Note any items that recirculate (go around twice)
+  - Collect output CSV from IDEAS Clinic staff
