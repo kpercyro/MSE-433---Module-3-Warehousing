@@ -686,6 +686,124 @@ def write_tote_item_release_csv(
             )
 
 
+SHAPE_NAMES = [
+    "Circle", "Pentagon", "Trapezoid", "Triangle",
+    "Star", "Moon", "Heart", "Cross",
+]
+
+
+def _shape_name(idx: int) -> str:
+    if 0 <= idx < len(SHAPE_NAMES):
+        return SHAPE_NAMES[idx]
+    return f"Shape{idx}"
+
+
+def write_summary_markdown(
+    path: str,
+    problem: ProblemInstance,
+    solution: Solution,
+    result: SimulationResult,
+) -> None:
+    lines: List[str] = []
+    a = lines.append
+
+    a("# Warehouse Conveyor Solver — Output Summary\n")
+
+    # --- Solver metrics ---
+    a("## Solver Results\n")
+    a("| Metric | Value |")
+    a("|---|---|")
+    a(f"| Orders | {problem.num_orders} |")
+    a(f"| Totes | {len(problem.tote_ids)} |")
+    a(f"| Total Items | {problem.total_items} |")
+    a(f"| Feasible | {'Yes' if result.feasible else 'No'} |")
+    a(f"| Makespan | {result.makespan:.1f} s |")
+    a(f"| Avg Completion Time | {result.avg_completion:.1f} s |")
+    a(f"| Dropped Items | {result.dropped_items} |")
+    a("")
+
+    # --- Tote inventory ---
+    a("---\n")
+    a("## Tote Inventory (Items on Each Tote)\n")
+    a("| Tote ID | Items | Total Qty |")
+    a("|---|---|---|")
+    for tote_id in sorted(problem.tote_inventory):
+        inv = problem.tote_inventory[tote_id]
+        parts = [f"{_shape_name(s)} ×{q}" for s, q in sorted(inv.items()) if q > 0]
+        total = sum(inv.values())
+        a(f"| {tote_id} | {', '.join(parts)} | {total} |")
+    a("")
+
+    # --- Belt sort-position assignments ---
+    a("---\n")
+    a("## Belt Sort-Position Assignments\n")
+    a("> Items travel along **one entry conveyor** and are sorted at ")
+    a(f"> **{problem.num_belts} belt positions** where orders are fulfilled.\n")
+    for b, queue in enumerate(solution.belt_queues):
+        a(f"### Belt Position {b + 1} ({len(queue)} order{'s' if len(queue) != 1 else ''})\n")
+        if not queue:
+            a("_No orders assigned._\n")
+            continue
+        a("| Queue Pos | Order Items | Total |")
+        a("|---|---|---|")
+        for pos, order_idx in enumerate(queue, start=1):
+            demand = problem.order_demands[order_idx]
+            parts = [f"{_shape_name(s)} ×{q}" for s, q in sorted(demand.items()) if q > 0]
+            total = sum(demand.values())
+            a(f"| {pos} | {', '.join(parts) if parts else '—'} | {total} |")
+        a("")
+
+    # --- Tote loading sequence ---
+    a("---\n")
+    a("## Tote Loading Sequence (Order Totes Are Placed on the Conveyor)\n")
+    a("| Load Order | Tote ID | Items in Tote |")
+    a("|---|---|---|")
+    for load_order, tote_id in enumerate(solution.tote_sequence, start=1):
+        items_in_tote = sum(problem.tote_inventory.get(tote_id, {}).values())
+        a(f"| {load_order} | {tote_id} | {items_in_tote} |")
+    a("")
+
+    # --- Per-tote item release order ---
+    a("---\n")
+    a("## Item Release Order Per Tote\n")
+    a("> For each tote (in loading sequence), the exact order to place items onto the entry conveyor.\n")
+
+    # Group release steps by tote, preserving within-tote order.
+    from collections import OrderedDict
+    tote_release_groups: Dict[int, List[Tuple[int, int, int, float]]] = OrderedDict()
+    for tote_id in solution.tote_sequence:
+        tote_release_groups[tote_id] = []
+    for global_order, tote_id, in_tote, shape, t in result.release_steps:
+        tote_release_groups.setdefault(tote_id, []).append(
+            (in_tote, shape, global_order, t)
+        )
+
+    for load_order, tote_id in enumerate(solution.tote_sequence, start=1):
+        items = tote_release_groups.get(tote_id, [])
+        total_in_tote = sum(problem.tote_inventory.get(tote_id, {}).values())
+        a(f"### Tote {tote_id} (Load #{load_order}, {total_in_tote} item{'s' if total_in_tote != 1 else ''})\n")
+        if not items:
+            a("_No items released._\n")
+            continue
+        a("| Release # (in tote) | Item | Time (s) |")
+        a("|---|---|---|")
+        for in_tote, shape, _global, t in items:
+            a(f"| {in_tote} | {_shape_name(shape)} | {t:.1f} |")
+        a("")
+
+    # --- Full flat release sequence for reference ---
+    a("---\n")
+    a("## Full Item Release Sequence (All Totes, Chronological)\n")
+    a("| # | Tote | Item Released | Time (s) |")
+    a("|---|---|---|---|")
+    for global_order, tote_id, _in_tote, shape, t in result.release_steps:
+        a(f"| {global_order} | {tote_id} | {_shape_name(shape)} | {t:.1f} |")
+    a("")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
 def resolve_path(base_dir: str, maybe_relative: str) -> str:
     if os.path.isabs(maybe_relative):
         return maybe_relative
@@ -717,6 +835,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-plan", default="plan.csv")
     parser.add_argument("--output-tote-sequence", default="tote_sequence.csv")
     parser.add_argument("--output-tote-items", default="tote_item_release.csv")
+    parser.add_argument("--output-summary", default="solver_output_summary.md")
     parser.add_argument("--verbose", action="store_true", default=True)
     return parser.parse_args()
 
@@ -731,6 +850,7 @@ def main() -> None:
     output_plan_path = resolve_path(args.base_dir, args.output_plan)
     output_tote_sequence_path = resolve_path(args.base_dir, args.output_tote_sequence)
     output_tote_items_path = resolve_path(args.base_dir, args.output_tote_items)
+    output_summary_path = resolve_path(args.base_dir, args.output_summary)
 
     problem = load_problem(
         order_itemtypes_path=order_itemtypes_path,
@@ -759,6 +879,7 @@ def main() -> None:
     write_plan_csv(output_plan_path, problem, best_solution)
     write_tote_sequence_csv(output_tote_sequence_path, problem, best_solution)
     write_tote_item_release_csv(output_tote_items_path, best_result.release_steps)
+    write_summary_markdown(output_summary_path, problem, best_solution, best_result)
 
     print("=== SA Warehouse Solver Summary ===")
     print(f"Orders: {problem.num_orders}")
@@ -771,6 +892,7 @@ def main() -> None:
     print(f"Plan CSV written to: {output_plan_path}")
     print(f"Tote sequence CSV written to: {output_tote_sequence_path}")
     print(f"Tote item release CSV written to: {output_tote_items_path}")
+    print(f"Summary markdown written to: {output_summary_path}")
 
 
 if __name__ == "__main__":
