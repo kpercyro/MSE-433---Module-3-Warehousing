@@ -592,7 +592,7 @@ def generate_tote_instructions(data, demands, belt_queues, loading_order, select
             oi = belt_queues[b][0]
             if oi in orders_to_show:
                 items = ", ".join(f"{q}x {sname(t)}" for t, q in sorted(demands[oi].items()))
-                lines.append(f"  Belt {b} → Order {oi}: {items}")
+                lines.append(f"  Belt {b + 1} → Order {oi}: {items}")
     lines.append("")
 
     lines.append("STEP 2: PICK ITEMS INTO TOTES")
@@ -613,7 +613,7 @@ def generate_tote_instructions(data, demands, belt_queues, loading_order, select
     lines.append("STEP 3: LOAD ITEMS ONTO RAMP (in this order!)")
     lines.append("-" * 50)
     for i, (itype, target_belt) in enumerate(loading_order):
-        lines.append(f"  {i + 1:3d}. Load 1x {sname(itype):12s} → (for Belt {target_belt})")
+        lines.append(f"  {i + 1:3d}. Load 1x {sname(itype):12s} → (for Belt {target_belt + 1})")
     lines.append("")
 
     lines.append("STEP 4: OBSERVE AND RECORD")
