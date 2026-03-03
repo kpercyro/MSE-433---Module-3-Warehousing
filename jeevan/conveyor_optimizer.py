@@ -31,6 +31,7 @@ from itertools import permutations
 # CONSTANTS
 # ============================================================
 SHAPES = ['circle', 'pentagon', 'trapezoid', 'triangle', 'star', 'moon', 'heart', 'cross']
+SHAPE_TO_COL = {s: i for i, s in enumerate(SHAPES)}
 NUM_BELTS = 4
 
 # Timing calibrated from example output: 15 items sorted in 213s
@@ -102,12 +103,17 @@ def load_data_from_csv(csv_dir):
                 rows.append(vals)
         return rows
 
-    order_itemtypes = parse_csv(os.path.join(csv_dir, 'order_itemtypes.csv'))
+    order_itemtypes_raw = parse_csv(os.path.join(csv_dir, 'order_itemtypes.csv'))
     order_quantities = parse_csv(os.path.join(csv_dir, 'order_quantities.csv'))
     orders_totes = parse_csv(os.path.join(csv_dir, 'orders_totes.csv'))
 
+    # Convert item type numbers to shape names
+    order_itemtypes = []
+    for row in order_itemtypes_raw:
+        order_itemtypes.append([SHAPES[v] for v in row])
+
     n_orders = len(order_itemtypes)
-    n_itemtypes = max(v for row in order_itemtypes for v in row) + 1
+    n_itemtypes = len(set(s for row in order_itemtypes for s in row))
     n_totes = max(v for row in orders_totes for v in row) + 1
 
     return {
@@ -144,6 +150,8 @@ def ototal(d):
 
 
 def sname(t):
+    if isinstance(t, str):
+        return t
     return SHAPES[t] if 0 <= t < 8 else f"type{t}"
 
 
@@ -555,8 +563,9 @@ def gen_csv(belt_queues, demands, filename):
                 oi = belt_queues[b][r]
                 c = [0] * 8
                 for t, q in demands[oi].items():
-                    if 0 <= t < 8:
-                        c[t] = q
+                    col = SHAPE_TO_COL[t] if isinstance(t, str) else t
+                    if 0 <= col < 8:
+                        c[col] = q
                 rows.append([b + 1] + c)
     with open(filename, 'w', newline='') as f:
         w = csv.writer(f)
@@ -588,11 +597,14 @@ def generate_tote_instructions(data, demands, belt_queues, loading_order, select
     lines.append("STEP 1: BELT ASSIGNMENTS (enter into conveyor CSV)")
     lines.append("-" * 50)
     for b in range(NUM_BELTS):
-        if belt_queues[b]:
-            oi = belt_queues[b][0]
+        queue_str = []
+        for idx, oi in enumerate(belt_queues[b]):
             if oi in orders_to_show:
                 items = ", ".join(f"{q}x {sname(t)}" for t, q in sorted(demands[oi].items()))
-                lines.append(f"  Belt {b + 1} → Order {oi}: {items}")
+                label = "then" if idx > 0 else "    "
+                queue_str.append(f"  Belt {b + 1} ({label}) Order {oi}: {items}")
+        for s in queue_str:
+            lines.append(s)
     lines.append("")
 
     lines.append("STEP 2: PICK ITEMS INTO TOTES")
@@ -610,10 +622,18 @@ def generate_tote_instructions(data, demands, belt_queues, loading_order, select
             lines.append(f"  Tote {tote_id}: {items}")
     lines.append("")
 
+    # Build full loading sequence: all items for all orders, grouped by belt queue order
+    full_loading = []
+    for b in range(NUM_BELTS):
+        for oi in belt_queues[b]:
+            for t, q in sorted(demands[oi].items()):
+                for _ in range(q):
+                    full_loading.append((sname(t), b))
+
     lines.append("STEP 3: LOAD ITEMS ONTO RAMP (in this order!)")
     lines.append("-" * 50)
-    for i, (itype, target_belt) in enumerate(loading_order):
-        lines.append(f"  {i + 1:3d}. Load 1x {sname(itype):12s} → (for Belt {target_belt + 1})")
+    for i, (shape, target_belt) in enumerate(full_loading):
+        lines.append(f"  {i + 1:3d}. Load 1x {shape:12s} → (for Belt {target_belt + 1})")
     lines.append("")
 
     lines.append("STEP 4: OBSERVE AND RECORD")
@@ -712,24 +732,23 @@ def main(seed=100, outdir='.', csv_dir=None):
     print("PHASE 1: Belt Assignment Optimization (SA)")
     print("=" * 65)
 
-    random.seed(42)
-    sa = SA(sim, demands, 'total_completion_time', iters=20000)
-    best_sol, _ = sa.run()
+    # Multiple restarts with both objectives for better solutions
+    n_restarts = 3
+    candidates = []
+    for restart in range(n_restarts):
+        for obj_name in ('total_completion_time', 'makespan'):
+            random.seed(42 + restart * 10 + (0 if obj_name == 'total_completion_time' else 1))
+            sa = SA(sim, demands, obj_name, iters=40000, T0=200, alpha=0.99985)
+            sol, score = sa.run(verbose=(restart == 0))
+            res = sim.simulate(sol)
+            candidates.append((res['makespan'], sol, res, obj_name, restart))
+            if restart > 0:
+                print(f"  Restart {restart+1} ({obj_name}): makespan={res['makespan']:.0f}s")
 
-    random.seed(43)
-    sa2 = SA(sim, demands, 'makespan', iters=20000)
-    sol2, _ = sa2.run()
-
-    # Full sim both
-    res1 = sim.simulate(best_sol)
-    res2 = sim.simulate(sol2)
-
-    if res1['makespan'] <= res2['makespan']:
-        opt_sol, opt_res = best_sol, res1
-        print(f"\n  Selected: total_completion_time optimizer")
-    else:
-        opt_sol, opt_res = sol2, res2
-        print(f"\n  Selected: makespan optimizer")
+    # Pick best overall by makespan
+    candidates.sort(key=lambda x: x[0])
+    _, opt_sol, opt_res, best_obj, best_restart = candidates[0]
+    print(f"\n  Selected: {best_obj} optimizer (restart {best_restart+1})")
 
     # Also compare vs naive
     naive_sol = [[] for _ in range(4)]
@@ -804,9 +823,9 @@ def main(seed=100, outdir='.', csv_dir=None):
             items = ", ".join(f"{q}x{sname(t)}" for t, q in sorted(demands[oi].items()))
             print(f"  Belt {b} → O{oi}: {items}")
 
-    # 6. Generate tote instructions
+    # 6. Generate tote instructions (for full optimized solution)
     instructions = generate_tote_instructions(
-        data, demands, small_queues, small_loading, selected)
+        data, demands, opt_sol, best_loading)
     inst_path = f"{outdir}/loading_instructions_seed{seed}.txt"
     with open(inst_path, 'w') as f:
         f.write(instructions)

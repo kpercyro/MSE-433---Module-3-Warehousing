@@ -1,4 +1,8 @@
-solution,makespan_sec,total_completion_time_sec,avg_completion_time_sec,recirculation_events,kate_objective,kate_total_completion_steps,kate_circulation,makespan_improvement_pct,total_ct_improvement_pct,kate_obj_improvement_pct
-Jeevan's SA,374.0,2024.0,184.0,0,72.5,69,7,16.1,38.4,8.2
-Kate's SA,374.0,2112.0,192.0,0,59.0,59,0,16.1,35.7,25.3
-Naive baseline,446.0,3284.0,298.5,0,79.0,76,6,0.0,0.0,0.0
+solution,composite_score,makespan_sec,total_completion_time_sec,avg_completion_time_sec,wait_spread_sec,recirculation_events,kate_objective,makespan_improvement_pct,composite_improvement_pct
+Arkhan (SA),78.7,368.0,2266.0,206.0,334,0,91.5,17.5,21.3
+Arkhan (SOF),79.8,392.0,2148.0,195.3,358,0,73.0,12.1,20.2
+Jeevan (SA),75.3,374.0,2024.0,184.0,332,0,72.5,16.1,24.7
+Kate (SA),76.7,374.0,2112.0,192.0,332,0,59.0,16.1,23.3
+Liam (SA),78.7,368.0,2266.0,206.0,334,0,91.5,17.5,21.3
+Manjary (LPT),107.3,470.0,3946.0,358.7,226,0,77.0,-5.4,-7.3
+Naive baseline,100.0,446.0,3284.0,298.5,328,0,79.0,0.0,0.0

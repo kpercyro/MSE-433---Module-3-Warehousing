@@ -1,11 +1,18 @@
 """
 compare_solutions.py
 ====================
-Apples-to-apples comparison of Jeevan's and Kate's SA-based optimizers
+Apples-to-apples comparison of all 5 team members' optimizers
 for the 4-belt conveyor problem (seed=100, 11 orders, 36 items).
 
-Runs both optimizers, converts each solution into the other's format,
-and evaluates all solutions through BOTH simulators.
+Members:
+- Arkhan:  Multi-restart SA (belt assignment), varied configs + SOF heuristic
+- Jeevan:  Multi-restart SA (belt assignment + loading order)
+- Kate:    SA optimizing tote sequence + order priority
+- Liam:    Event-driven SA (joint belt + tote optimization)
+- Manjary: LPT (Longest Processing Time) heuristic
+
+Runs each approach, evaluates through BOTH Jeevan's ConveyorSim
+and Kate's evaluator, then prints a unified comparison.
 """
 
 import sys
@@ -16,13 +23,42 @@ import csv
 from collections import defaultdict
 
 # ---------------------------------------------------------------------------
-# Import Jeevan's module
+# Import Jeevan's module (shared simulator / helpers)
 # ---------------------------------------------------------------------------
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jeevan'))
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_script_dir, 'jeevan'))
 from conveyor_optimizer import (
     generate_data, get_demands, get_tote_contents, ototal, sname,
     ConveyorSim, SA, optimize_loading_order, NUM_BELTS,
 )
+
+# ---------------------------------------------------------------------------
+# Import event-driven solvers (Arkhan + Liam) via importlib to avoid conflicts
+# ---------------------------------------------------------------------------
+import importlib.util
+
+def _load_event_solver(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+_arkhan_mod = _load_event_solver("arkhan_solver", os.path.join(_script_dir, 'arkhan', 'solver.py'))
+arkhan_load_problem = _arkhan_mod.load_problem
+arkhan_run_sa = _arkhan_mod.run_simulated_annealing
+ArkhanParams = _arkhan_mod.SolverParams
+
+_arkhan_sof_mod = _load_event_solver("arkhan_sof_solver", os.path.join(_script_dir, 'arkhan', 'sof_solver.py'))
+arkhan_sof_load_problem = _arkhan_sof_mod.load_problem
+arkhan_sof_build = _arkhan_sof_mod.build_sof_solution
+arkhan_sof_simulate = _arkhan_sof_mod.simulate
+ArkhanSofConveyorParams = _arkhan_sof_mod.ConveyorParams
+
+_liam_mod = _load_event_solver("liam_solver", os.path.join(_script_dir, 'liam', 'solver.py'))
+liam_load_problem = _liam_mod.load_problem
+liam_run_sa = _liam_mod.run_simulated_annealing
+LiamParams = _liam_mod.SolverParams
 
 
 # ============================================================
@@ -30,10 +66,7 @@ from conveyor_optimizer import (
 # ============================================================
 
 def build_tote_data(data):
-    """Build Kate-style tote_data from Jeevan's data structure.
-
-    Returns {tote_id: [(order_id, qty), ...]}  -- matches Kate's format exactly.
-    """
+    """Build Kate-style tote_data: {tote_id: [(order_id, qty), ...]}."""
     tote_data = {}
     for order_id in range(data['n_orders']):
         for j in range(len(data['order_itemtypes'][order_id])):
@@ -44,7 +77,7 @@ def build_tote_data(data):
 
 
 def build_tote_data_enriched(data):
-    """Enriched version: {tote_id: [(order_id, item_type, qty), ...]}"""
+    """Enriched: {tote_id: [(order_id, item_type, qty), ...]}."""
     tote_data = {}
     for order_id in range(data['n_orders']):
         for j, item_type in enumerate(data['order_itemtypes'][order_id]):
@@ -55,10 +88,7 @@ def build_tote_data_enriched(data):
 
 
 def kate_evaluate(tote_seq, order_priority, tote_data, n_orders, alpha=0.5):
-    """Kate's evaluate_solution, parameterized (no globals).
-
-    Returns (objective, total_completion, circulation).
-    """
+    """Kate's evaluate_solution. Returns (objective, total_completion, circulation)."""
     current_time = 0
     circulation = 0
 
@@ -148,26 +178,20 @@ def kate_sa(tote_data, all_totes, all_orders,
 
 
 # ============================================================
-# CONVERSION FUNCTIONS
+# CONVERSION HELPERS
 # ============================================================
 
 def kate_to_belt_queues(order_priority, tote_data, tote_seq):
-    """Convert Kate's solution -> Jeevan's belt_queues.
-
-    Simulates Kate's activation pattern to determine which belt
-    each subsequent order is assigned to.
-    """
+    """Convert Kate's solution -> belt_queues."""
     n_orders = len(order_priority)
     belt_queues = [[] for _ in range(4)]
 
-    # Total items per order (from all totes)
     remaining = defaultdict(int)
     for tote in tote_data:
         for (order, qty) in tote_data[tote]:
             remaining[order] += qty
 
-    # First 4 orders -> belts 0-3
-    active = {}  # order -> belt
+    active = {}
     next_idx = 0
     for b in range(min(4, n_orders)):
         o = order_priority[next_idx]
@@ -175,7 +199,6 @@ def kate_to_belt_queues(order_priority, tote_data, tote_seq):
         active[o] = b
         next_idx += 1
 
-    # Simulate tote processing to find when orders complete
     for tote in tote_seq:
         if tote not in tote_data:
             continue
@@ -197,13 +220,8 @@ def kate_to_belt_queues(order_priority, tote_data, tote_seq):
 
 def kate_to_loading_order(tote_seq, order_priority, belt_queues,
                           tote_data_enriched):
-    """Convert Kate's tote sequence -> Jeevan's loading_order.
-
-    Only includes items for the first order on each belt
-    (the simulator adds items for subsequent orders dynamically).
-    Items are ordered by Kate's optimized tote sequence.
-    """
-    first_orders = {}  # order_id -> belt
+    """Convert Kate's tote sequence -> loading_order for ConveyorSim."""
+    first_orders = {}
     for b in range(4):
         if belt_queues[b]:
             first_orders[belt_queues[b][0]] = b
@@ -223,12 +241,8 @@ def kate_to_loading_order(tote_seq, order_priority, belt_queues,
     return loading_order
 
 
-def jeevan_to_order_priority(belt_queues):
-    """Flatten belt_queues -> order_priority (interleaved by depth).
-
-    depth 0: belt0[0], belt1[0], belt2[0], belt3[0]
-    depth 1: belt0[1], belt1[1], ...
-    """
+def belt_queues_to_order_priority(belt_queues):
+    """Flatten belt_queues -> order_priority (interleaved by depth)."""
     order_priority = []
     max_depth = max((len(q) for q in belt_queues), default=0)
     for depth in range(max_depth):
@@ -238,15 +252,10 @@ def jeevan_to_order_priority(belt_queues):
     return order_priority
 
 
-def jeevan_to_tote_sequence(belt_queues, data):
-    """Derive tote sequence from Jeevan's belt assignment.
+def belt_queues_to_tote_sequence(belt_queues, data):
+    """Derive tote sequence from belt assignment."""
+    order_priority = belt_queues_to_order_priority(belt_queues)
 
-    Totes are ordered by when their associated orders appear in the
-    interleaved priority, preserving Jeevan's scheduling insight.
-    """
-    order_priority = jeevan_to_order_priority(belt_queues)
-
-    # order -> its totes (unique, in data order)
     order_totes = defaultdict(list)
     for order_id in range(data['n_orders']):
         for tote in data['orders_totes'][order_id]:
@@ -261,7 +270,6 @@ def jeevan_to_tote_sequence(belt_queues, data):
                 tote_sequence.append(tote)
                 seen.add(tote)
 
-    # Safety: add any remaining totes
     all_tote_ids = set()
     for order_id in range(data['n_orders']):
         for tote in data['orders_totes'][order_id]:
@@ -275,6 +283,92 @@ def jeevan_to_tote_sequence(belt_queues, data):
 
 
 # ============================================================
+# MANJARY'S LPT POLICY
+# ============================================================
+
+def manjary_lpt(demands, num_belts=4):
+    """LPT assignment (Manjary's approach from policies.py)."""
+    sizes = sorted([(ototal(d), i) for i, d in enumerate(demands)], reverse=True)
+    qs = [[] for _ in range(num_belts)]
+    load = [0] * num_belts
+    for sz, oi in sizes:
+        b = min(range(num_belts), key=lambda x: load[x])
+        qs[b].append(oi)
+        load[b] += sz
+    return qs, load
+
+
+# ============================================================
+# ARKHAN'S EVENT-DRIVEN SA
+# ============================================================
+
+def arkhan_sa(data_dir):
+    """Run Arkhan's event-driven SA. Returns belt_queues and tote_sequence."""
+    problem = arkhan_load_problem(
+        os.path.join(data_dir, 'order_itemtypes.csv'),
+        os.path.join(data_dir, 'order_quantities.csv'),
+        os.path.join(data_dir, 'orders_totes.csv'),
+    )
+    params = ArkhanParams(iterations=5000, seed=42, t0=1.0, alpha=0.99)
+    best_sol, best_res, _ = arkhan_run_sa(problem, params, verbose=False)
+    return best_sol.belt_queues, best_sol.tote_sequence, best_res
+
+
+# ============================================================
+# ARKHAN'S SOF (Shortest-Order-First) HEURISTIC
+# ============================================================
+
+def arkhan_sof(data_dir):
+    """Run Arkhan's SOF heuristic. Returns belt_queues, tote_sequence, and sim results."""
+    prob = arkhan_sof_load_problem(
+        os.path.join(data_dir, 'order_itemtypes.csv'),
+        os.path.join(data_dir, 'order_quantities.csv'),
+        os.path.join(data_dir, 'orders_totes.csv'),
+    )
+    queues, tote_seq = arkhan_sof_build(prob)
+    params = ArkhanSofConveyorParams()
+    feasible, makespan, avg_ct, dropped, steps = arkhan_sof_simulate(prob, queues, tote_seq, params)
+    return queues, tote_seq, feasible, makespan, avg_ct, dropped
+
+
+# ============================================================
+# JEEVAN'S MULTI-RESTART SA
+# ============================================================
+
+def jeevan_sa(sim, demands):
+    """Jeevan's multi-restart SA (3 restarts x 2 objectives, 40k iters)."""
+    n_restarts = 3
+    candidates = []
+    for restart in range(n_restarts):
+        for obj_name in ('total_completion_time', 'makespan'):
+            seed_val = 42 + restart * 10 + (0 if obj_name == 'total_completion_time' else 1)
+            random.seed(seed_val)
+            sa = SA(sim, demands, obj_name, iters=40000, T0=200, alpha=0.99985)
+            sol, _ = sa.run(verbose=False)
+            res = sim.simulate(sol)
+            candidates.append((res['makespan'], sol, res))
+
+    _, best_sol, best_res = min(candidates, key=lambda x: x[0])
+    return best_sol
+
+
+# ============================================================
+# LIAM'S EVENT-DRIVEN SA
+# ============================================================
+
+def liam_sa(data_dir):
+    """Run Liam's event-driven SA. Returns belt_queues and tote_sequence."""
+    problem = liam_load_problem(
+        os.path.join(data_dir, 'order_itemtypes.csv'),
+        os.path.join(data_dir, 'order_quantities.csv'),
+        os.path.join(data_dir, 'orders_totes.csv'),
+    )
+    params = LiamParams(iterations=5000, seed=42, t0=1.0, alpha=0.99)
+    best_sol, best_res, _ = liam_run_sa(problem, params, verbose=False)
+    return best_sol.belt_queues, best_sol.tote_sequence, best_res
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -282,7 +376,7 @@ def main():
     SEED = 100
 
     print("=" * 70)
-    print("CROSS-EVALUATION: Jeevan vs Kate Conveyor Optimizers")
+    print("CROSS-EVALUATION: Arkhan (SA+SOF) vs Jeevan vs Kate vs Liam vs Manjary")
     print("=" * 70)
 
     # -- 1. Shared data --------------------------------------------------
@@ -304,102 +398,139 @@ def main():
 
     sim = ConveyorSim(demands)
 
-    # -- 2. Run Jeevan's optimizer ----------------------------------------
+    # -- 2. Run each optimizer -------------------------------------------
+
+    # --- Arkhan ---
     print(f"\n{'-' * 70}")
-    print("Running Jeevan's SA (belt assignment + loading order)...")
+    print("Running Arkhan's SA (event-driven simulation)...")
     print("-" * 70)
+    csv_dir = os.path.join(_script_dir, 'jeevan')
+    a_belts, a_tote_seq, a_own_res = arkhan_sa(csv_dir)
+    a_loading = sim.smart_loading_order(a_belts)
+    a_res = sim.simulate(a_belts, a_loading)
+    print(f"  Makespan (Jeevan sim): {a_res['makespan']:.0f}s")
+    print(f"  Makespan (Arkhan sim): {a_own_res.makespan:.1f}")
+    for b in range(4):
+        ords = " -> ".join(f"O{o}" for o in a_belts[b])
+        ld = sum(ototal(demands[o]) for o in a_belts[b])
+        print(f"  Belt {b+1} [{ld:2d} items]: {ords}")
 
-    random.seed(42)
-    sa1 = SA(sim, demands, 'total_completion_time', iters=20000)
-    j_belts1, _ = sa1.run(verbose=True)
+    # --- Arkhan SOF ---
+    print(f"\n{'-' * 70}")
+    print("Running Arkhan's SOF (Shortest-Order-First heuristic)...")
+    print("-" * 70)
+    asof_belts, asof_tote_seq, asof_feasible, asof_mk, asof_avg, asof_dropped = arkhan_sof(csv_dir)
+    asof_loading = sim.smart_loading_order(asof_belts)
+    asof_res = sim.simulate(asof_belts, asof_loading)
+    print(f"  Makespan (Jeevan sim): {asof_res['makespan']:.0f}s")
+    print(f"  Makespan (SOF sim):    {asof_mk:.1f}s")
+    print(f"  Feasible: {asof_feasible}, Dropped: {asof_dropped}")
+    for b in range(4):
+        ords = " -> ".join(f"O{o}" for o in asof_belts[b])
+        ld = sum(ototal(demands[o]) for o in asof_belts[b])
+        print(f"  Belt {b+1} [{ld:2d} items]: {ords}")
 
-    random.seed(43)
-    sa2 = SA(sim, demands, 'makespan', iters=20000)
-    j_belts2, _ = sa2.run(verbose=True)
-
-    res1 = sim.simulate(j_belts1)
-    res2 = sim.simulate(j_belts2)
-
-    if res1['makespan'] <= res2['makespan']:
-        j_belts = j_belts1
-        print(f"\n  Selected: total_completion_time optimizer "
-              f"(makespan={res1['makespan']:.0f}s)")
-    else:
-        j_belts = j_belts2
-        print(f"\n  Selected: makespan optimizer "
-              f"(makespan={res2['makespan']:.0f}s)")
-
-    _, strategies = optimize_loading_order(sim, j_belts, demands)
-    best_strat = min(strategies, key=lambda k: strategies[k][1]['makespan'])
-    j_loading = strategies[best_strat][0]
-
-    print(f"  Loading strategy: {best_strat}")
+    # --- Jeevan ---
+    print(f"\n{'-' * 70}")
+    print("Running Jeevan's SA (3 restarts x 2 objectives, 40k iters)...")
+    print("-" * 70)
+    j_belts = jeevan_sa(sim, demands)
+    _, j_strategies = optimize_loading_order(sim, j_belts, demands)
+    j_best_strat = min(j_strategies, key=lambda k: j_strategies[k][1]['makespan'])
+    j_loading = j_strategies[j_best_strat][0]
+    j_res = sim.simulate(j_belts, j_loading)
+    print(f"  Makespan: {j_res['makespan']:.0f}s, strategy: {j_best_strat}")
     for b in range(4):
         ords = " -> ".join(f"O{o}" for o in j_belts[b])
         ld = sum(ototal(demands[o]) for o in j_belts[b])
-        print(f"  Belt {b} [{ld:2d} items]: {ords}")
+        print(f"  Belt {b+1} [{ld:2d} items]: {ords}")
 
-    # -- 3. Run Kate's optimizer ------------------------------------------
+    # --- Kate ---
     print(f"\n{'-' * 70}")
     print("Running Kate's SA (tote sequence + order priority)...")
     print("-" * 70)
-
     random.seed(42)
     k_totes, k_orders, k_cost = kate_sa(tote_data, all_totes, all_orders)
-
-    print(f"  Best objective: {k_cost:.2f}")
-    print(f"  Order priority: {k_orders}")
-    print(f"  Tote sequence:  {k_totes}")
-
-    # -- 4. Convert solutions ---------------------------------------------
-    print(f"\n{'-' * 70}")
-    print("Converting solutions between formats...")
-    print("-" * 70)
-
-    # Kate -> Jeevan format
     k2j_belts = kate_to_belt_queues(k_orders, tote_data, k_totes)
-    k2j_loading = kate_to_loading_order(k_totes, k_orders, k2j_belts,
-                                         tote_data_rich)
+    k2j_loading = kate_to_loading_order(k_totes, k_orders, k2j_belts, tote_data_rich)
+    print(f"  Kate objective: {k_cost:.2f}")
+    print(f"  Order priority: {k_orders}")
 
-    print("  Kate -> Jeevan belt_queues:")
+    # --- Liam ---
+    print(f"\n{'-' * 70}")
+    print("Running Liam's SA (event-driven simulation)...")
+    print("-" * 70)
+    # Liam reads CSVs directly; use jeevan's dir since it has the CSV files
+    csv_dir = os.path.join(_script_dir, 'jeevan')
+    l_belts, l_tote_seq, l_own_res = liam_sa(csv_dir)
+    l_loading = sim.smart_loading_order(l_belts)
+    l_res = sim.simulate(l_belts, l_loading)
+    print(f"  Makespan (Jeevan sim): {l_res['makespan']:.0f}s")
+    print(f"  Makespan (Liam sim):   {l_own_res.makespan:.1f}")
     for b in range(4):
-        ords = " -> ".join(f"O{o}" for o in k2j_belts[b])
-        print(f"    Belt {b}: {ords}")
-    print(f"  Kate -> Jeevan loading_order: {len(k2j_loading)} items")
+        ords = " -> ".join(f"O{o}" for o in l_belts[b])
+        ld = sum(ototal(demands[o]) for o in l_belts[b])
+        print(f"  Belt {b+1} [{ld:2d} items]: {ords}")
 
-    # Jeevan -> Kate format
-    j2k_orders = jeevan_to_order_priority(j_belts)
-    j2k_totes = jeevan_to_tote_sequence(j_belts, data)
+    # --- Manjary ---
+    print(f"\n{'-' * 70}")
+    print("Running Manjary's LPT heuristic...")
+    print("-" * 70)
+    m_belts, m_loads = manjary_lpt(demands)
+    m_loading = sim.smart_loading_order(m_belts)
+    m_res = sim.simulate(m_belts, m_loading)
+    print(f"  Makespan: {m_res['makespan']:.0f}s")
+    print(f"  Belt loads: {m_loads}")
+    for b in range(4):
+        ords = " -> ".join(f"O{o}" for o in m_belts[b])
+        ld = sum(ototal(demands[o]) for o in m_belts[b])
+        print(f"  Belt {b+1} [{ld:2d} items]: {ords}")
 
-    print(f"  Jeevan -> Kate order_priority: {j2k_orders}")
-    print(f"  Jeevan -> Kate tote_sequence:  {j2k_totes}")
-
-    # -- 5. Naive baselines -----------------------------------------------
+    # --- Naive baseline ---
     naive_belts = [[] for _ in range(4)]
     for i in range(n_orders):
         naive_belts[i % 4].append(i)
     naive_loading = sim.smart_loading_order(naive_belts)
-
     naive_totes = sorted(all_totes)
     naive_orders = list(range(n_orders))
 
-    # -- 6. Cross-evaluate ------------------------------------------------
-    print(f"\n{'=' * 70}")
-    print("RESULTS: All solutions through both simulators")
-    print("=" * 70)
-
+    # -- 3. Build solutions dict -----------------------------------------
     solutions = {
-        "Jeevan's SA": {
+        "Arkhan (SA)": {
+            'belts': a_belts,
+            'loading': a_loading,
+            'totes': a_tote_seq,
+            'orders': belt_queues_to_order_priority(a_belts),
+        },
+        "Arkhan (SOF)": {
+            'belts': asof_belts,
+            'loading': asof_loading,
+            'totes': asof_tote_seq,
+            'orders': belt_queues_to_order_priority(asof_belts),
+        },
+        "Jeevan (SA)": {
             'belts': j_belts,
             'loading': j_loading,
-            'totes': j2k_totes,
-            'orders': j2k_orders,
+            'totes': belt_queues_to_tote_sequence(j_belts, data),
+            'orders': belt_queues_to_order_priority(j_belts),
         },
-        "Kate's SA": {
+        "Kate (SA)": {
             'belts': k2j_belts,
             'loading': k2j_loading,
             'totes': k_totes,
             'orders': k_orders,
+        },
+        "Liam (SA)": {
+            'belts': l_belts,
+            'loading': l_loading,
+            'totes': l_tote_seq,
+            'orders': belt_queues_to_order_priority(l_belts),
+        },
+        "Manjary (LPT)": {
+            'belts': m_belts,
+            'loading': m_loading,
+            'totes': belt_queues_to_tote_sequence(m_belts, data),
+            'orders': belt_queues_to_order_priority(m_belts),
         },
         "Naive baseline": {
             'belts': naive_belts,
@@ -409,16 +540,21 @@ def main():
         },
     }
 
-    # Compute results
+    # -- 4. Cross-evaluate -----------------------------------------------
+    print(f"\n{'=' * 70}")
+    print("RESULTS: All solutions through both simulators")
+    print("=" * 70)
+
     results = {}
     for name, sol in solutions.items():
         j_res = sim.simulate(sol['belts'], sol['loading'])
         k_obj, k_ct, k_circ = kate_evaluate(
             sol['totes'], sol['orders'], tote_data, n_orders)
-        results[name] = {'jeevan': j_res, 'kate_obj': k_obj,
-                         'kate_ct': k_ct, 'kate_circ': k_circ}
+        results[name] = {
+            'jeevan': j_res,
+            'kate_obj': k_obj, 'kate_ct': k_ct, 'kate_circ': k_circ
+        }
 
-    # Table header
     hdr = (f"{'Solution':<20s} | {'Makespan':>10s} | {'TotalCT':>10s} | "
            f"{'AvgCT':>8s} | {'Recirc':>6s} | "
            f"{'Kate Obj':>8s} | {'Kate CT':>7s} | {'Circ':>5s}")
@@ -440,36 +576,80 @@ def main():
               f"{r['kate_ct']:>7.0f} | "
               f"{r['kate_circ']:>5.0f}")
 
-    # -- 7. Normalized comparison -----------------------------------------
+    # -- 5. Neutral composite objective ------------------------------------
+    # Uses only Jeevan's physical simulator (most realistic timing model).
+    # Composite = 0.35*makespan + 0.35*avg_completion + 0.15*total_CT + 0.15*spread
+    # All normalized to naive baseline = 100 so lower is better.
     print(f"\n{'=' * 70}")
-    print("NORMALIZED: % improvement over naive baseline")
+    print("COMPOSITE SCORE (neutral, from physical simulator)")
+    print("  35% makespan + 35% avg completion + 15% total CT + 15% wait spread")
+    print("  Normalized: naive baseline = 100, lower = better")
     print("=" * 70)
 
     naive_r = results["Naive baseline"]
     naive_ms = naive_r['jeevan']['makespan']
     naive_tct = naive_r['jeevan']['total_completion_time']
+    naive_avg = naive_r['jeevan']['avg_completion_time']
     naive_ko = naive_r['kate_obj']
 
-    hdr2 = (f"{'Solution':<20s} | {'Makespan':>10s} | "
-            f"{'TotalCT':>10s} | {'Kate Obj':>10s}")
-    print(f"\n{hdr2}")
-    print("-" * len(hdr2))
+    cts_naive = naive_r['jeevan']['order_completion_times']
+    naive_spread = max(cts_naive.values()) - min(cts_naive.values())
 
     for name in solutions:
         r = results[name]
         j = r['jeevan']
-        ms_imp = (naive_ms - j['makespan']) / naive_ms * 100
-        ct_imp = (naive_tct - j['total_completion_time']) / naive_tct * 100
-        ko_imp = (naive_ko - r['kate_obj']) / naive_ko * 100
-        print(f"{name:<20s} | {ms_imp:>+9.1f}% | "
-              f"{ct_imp:>+9.1f}% | {ko_imp:>+9.1f}%")
+        cts = j['order_completion_times']
+        spread = max(cts.values()) - min(cts.values()) if cts else 0
+        r['spread'] = spread
+        # Composite: normalized so naive = 100
+        r['composite'] = (
+            0.35 * (j['makespan'] / naive_ms) +
+            0.35 * (j['avg_completion_time'] / naive_avg) +
+            0.15 * (j['total_completion_time'] / naive_tct) +
+            0.15 * (spread / naive_spread if naive_spread > 0 else 1.0)
+        ) * 100
 
-    # -- 8. Detail: order completion times --------------------------------
+    ranked = sorted(
+        [(name, results[name]) for name in solutions if name != "Naive baseline"],
+        key=lambda x: x[1]['composite'])
+
+    hdr2 = (f"{'Rank':<5s} {'Solution':<20s} | {'Composite':>10s} | "
+            f"{'Makespan':>10s} | {'AvgCT':>10s} | {'Spread':>10s} | "
+            f"{'Kate Obj':>10s}")
+    print(f"\n{hdr2}")
+    print("-" * len(hdr2))
+
+    for rank, (name, r) in enumerate(ranked, 1):
+        j = r['jeevan']
+        print(f"  {rank:<3d} {name:<20s} | {r['composite']:>9.1f} | "
+              f"{j['makespan']:>9.0f}s | "
+              f"{j['avg_completion_time']:>9.1f}s | "
+              f"{r['spread']:>9.0f}s | "
+              f"{r['kate_obj']:>9.1f}")
+
+    # Naive baseline reference
+    print(f"  --- {'Naive baseline':<20s} | {100.0:>9.1f} | "
+          f"{naive_ms:>9.0f}s | "
+          f"{naive_avg:>9.1f}s | "
+          f"{naive_spread:>9.0f}s | "
+          f"{naive_ko:>9.1f}")
+
+    # Improvement summary
+    print(f"\n  % improvement over naive:")
+    for rank, (name, r) in enumerate(ranked, 1):
+        j = r['jeevan']
+        ms_imp = (naive_ms - j['makespan']) / naive_ms * 100
+        avg_imp = (naive_avg - j['avg_completion_time']) / naive_avg * 100
+        comp_imp = (100 - r['composite'])
+        print(f"    {rank}. {name:<20s}  composite: {comp_imp:>+5.1f}%  "
+              f"makespan: {ms_imp:>+5.1f}%  avg_ct: {avg_imp:>+5.1f}%")
+
+    # -- 6. Detail: order completion times -------------------------------
     print(f"\n{'=' * 70}")
     print("DETAIL: Order completion times (Jeevan's simulator, seconds)")
     print("=" * 70)
 
-    for name in ["Jeevan's SA", "Kate's SA"]:
+    for name in ["Arkhan (SA)", "Arkhan (SOF)", "Jeevan (SA)", "Kate (SA)", "Liam (SA)", "Manjary (LPT)"]:
         r = results[name]
         cts = sorted(r['jeevan']['order_completion_times'].items(),
                      key=lambda x: x[1])
@@ -479,36 +659,34 @@ def main():
                               for t, q in sorted(demands[o].items()))
             print(f"    {ct:6.0f}s : O{o} ({ototal(demands[o])} items: {items})")
 
-    # -- 9. Export CSV ----------------------------------------------------
+    # -- 7. Export CSV ---------------------------------------------------
     csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'comparison_results.csv')
     with open(csv_path, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['solution',
+                     'composite_score',
                      'makespan_sec', 'total_completion_time_sec',
-                     'avg_completion_time_sec', 'recirculation_events',
-                     'kate_objective', 'kate_total_completion_steps',
-                     'kate_circulation',
+                     'avg_completion_time_sec', 'wait_spread_sec',
+                     'recirculation_events',
+                     'kate_objective',
                      'makespan_improvement_pct',
-                     'total_ct_improvement_pct',
-                     'kate_obj_improvement_pct'])
+                     'composite_improvement_pct'])
         for name in solutions:
             r = results[name]
             j = r['jeevan']
             ms_imp = (naive_ms - j['makespan']) / naive_ms * 100
-            ct_imp = (naive_tct - j['total_completion_time']) / naive_tct * 100
-            ko_imp = (naive_ko - r['kate_obj']) / naive_ko * 100
+            comp_imp = 100 - r['composite']
             w.writerow([name,
+                        f"{r['composite']:.1f}",
                         f"{j['makespan']:.1f}",
                         f"{j['total_completion_time']:.1f}",
                         f"{j['avg_completion_time']:.1f}",
+                        f"{r['spread']:.0f}",
                         j['recirculation_events'],
                         f"{r['kate_obj']:.1f}",
-                        r['kate_ct'],
-                        r['kate_circ'],
                         f"{ms_imp:.1f}",
-                        f"{ct_imp:.1f}",
-                        f"{ko_imp:.1f}"])
+                        f"{comp_imp:.1f}"])
 
     print(f"\n  CSV saved to {csv_path}")
     print()
