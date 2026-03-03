@@ -371,7 +371,7 @@ def write_markdown(
 # ── CLI ───────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description="Shortest-Order-First conveyor solver")
-    ap.add_argument("--base-dir", default=".")
+    ap.add_argument("--base-dir", default=os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--order-itemtypes", default="order_itemtypes.csv")
     ap.add_argument("--order-quantities", default="order_quantities.csv")
     ap.add_argument("--orders-totes", default="orders_totes.csv")
