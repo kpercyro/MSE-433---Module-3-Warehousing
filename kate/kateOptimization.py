@@ -3,14 +3,18 @@ import numpy as np
 import random
 import math
 import copy
+from pathlib import Path
 
 # ============================================================
 # LOAD GENERATOR FILES
 # ============================================================
 
-order_itemtypes = pd.read_csv("order_itemtypes.csv", header=None)
-order_quantities = pd.read_csv("order_quantities.csv", header=None)
-orders_totes = pd.read_csv("orders_totes.csv", header=None)
+# ensure we look in the script's folder
+base_dir = Path(__file__).parent
+
+order_itemtypes = pd.read_csv(base_dir / "order_itemtypes.csv", header=None)
+order_quantities = pd.read_csv(base_dir / "order_quantities.csv", header=None)
+orders_totes = pd.read_csv(base_dir / "orders_totes.csv", header=None)
 
 n_orders = len(order_itemtypes)
 
@@ -159,27 +163,43 @@ print("Best Objective:", best_cost)
 # ============================================================
 
 # 1. Tote Sequence
-pd.DataFrame(best_tote_seq).to_csv("tote_sequence.csv",
+pd.DataFrame(best_tote_seq).to_csv(base_dir / "tote_sequence.csv",
                                    index=False,
                                    header=False)
 
 # 2. Order Activation Priority
-pd.DataFrame(best_order_seq).to_csv("order_sequence.csv",
+pd.DataFrame(best_order_seq).to_csv(base_dir / "order_sequence.csv",
                                     index=False,
                                     header=False)
 
 # 3. Item Release Plan
+# 3. Item Release Plan
+# 3. Item Release Plan (WITH ITEM TYPE INCLUDED)
+
 rows = []
+
 for tote in best_tote_seq:
     items = tote_data[tote]
     items_sorted = sorted(items,
                           key=lambda x: best_order_seq.index(x[0]))
+
     for (order, qty) in items_sorted:
-        rows.append([tote, order, qty])
+
+        # Find correct item type from generator data
+        for col in range(order_itemtypes.shape[1]):
+
+            if pd.isna(order_itemtypes.iloc[order, col]):
+                continue
+
+            if int(orders_totes.iloc[order, col]) == tote:
+
+                item_type = order_itemtypes.iloc[order, col]
+                rows.append([tote, order, item_type, qty])
+                break
 
 pd.DataFrame(rows,
-             columns=["tote", "order", "quantity"]
-             ).to_csv("item_release_sequence.csv",
+             columns=["tote", "order", "item_type", "quantity"]
+             ).to_csv(base_dir / "item_release_sequence.csv",
                       index=False)
 
-print("All outputs generated.")
+print("Item release sequence generated with item types.")
