@@ -368,6 +368,20 @@ def write_markdown(
         f.write("\n".join(L))
 
 
+# ── Plan CSV writer ───────────────────────────────────────────────────────
+def write_plan_csv(path: str, prob: Problem, queues: List[List[int]]) -> None:
+    header = ["conv_num", "cirle", "pentagon", "trapezoid", "triangle",
+              "star", "moon", "heart", "cross"]
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for conv_num, queue in enumerate(queues):
+            for order_idx in queue:
+                demand = prob.order_demands[order_idx]
+                row = [conv_num + 1] + [demand.get(s, 0) for s in range(8)]
+                w.writerow(row)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description="Shortest-Order-First conveyor solver")
@@ -377,6 +391,7 @@ def main():
     ap.add_argument("--orders-totes", default="orders_totes.csv")
     ap.add_argument("--num-belts", type=int, default=4)
     ap.add_argument("--output", default="sof_instructions.md")
+    ap.add_argument("--output-plan", default="sof_plan.csv")
     args = ap.parse_args()
 
     def p(rel):
@@ -389,13 +404,16 @@ def main():
     feasible, mk, avg, dropped, steps = simulate(prob, queues, tote_seq, params)
 
     out = p(args.output)
+    plan_out = p(args.output_plan)
     write_markdown(out, prob, queues, tote_seq, feasible, mk, avg, dropped, steps)
+    write_plan_csv(plan_out, prob, queues)
 
     print(f"SOF Solver  |  Orders: {prob.num_orders}  Totes: {len(prob.tote_ids)}  "
           f"Items: {prob.total_items}")
     print(f"Feasible: {feasible}  Makespan: {mk:.1f}s  Avg: {avg:.1f}s  "
           f"Dropped: {dropped}")
     print(f"Instructions written to: {out}")
+    print(f"Plan CSV written to: {plan_out}")
 
 
 if __name__ == "__main__":
