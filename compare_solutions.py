@@ -20,6 +20,7 @@ import os
 import random
 import math
 import csv
+import statistics
 from collections import defaultdict
 
 # ---------------------------------------------------------------------------
@@ -660,17 +661,22 @@ def main():
             print(f"    {ct:6.0f}s : O{o} ({ototal(demands[o])} items: {items})")
 
     # -- 7. Actual physical run comparison --------------------------------
+    # Day 1: Ran two SA variants (Arkhan/Jeevan SA identical, Kate/Liam SA identical)
+    # Day 2: Narrowed to SA vs SOF final showdown
     print(f"\n{'=' * 70}")
-    print("ACTUAL PHYSICAL RUNS vs SIMULATOR")
+    print("ACTUAL PHYSICAL RUNS vs SIMULATOR (4 runs across 2 days)")
     print("=" * 70)
 
-    actual_runs = {
-        "Liam (actual)":   os.path.join(_script_dir, 'grp_3_a_output.csv'),
-        "Jeevan (actual)": os.path.join(_script_dir, 'grp3_b_output.csv'),
-    }
+    actual_runs = [
+        # (label, file, algorithm, day)
+        ("Day1 Run A (SA)",  os.path.join(_script_dir, 'grp_3_run_1_a_Liam_SA.csv'),    "SA",  1),
+        ("Day1 Run B (SA)",  os.path.join(_script_dir, 'grp3_run_1_b_Arkhan_SA.csv'),    "SA",  1),
+        ("Day2 Run A (SA)",  os.path.join(_script_dir, 'grp_3_run_2_a_Liam_SA.csv'),     "SA",  2),
+        ("Day2 Run B (SOF)", os.path.join(_script_dir, 'grp_3_run_2_b_Arkhan_SOF.csv'),  "SOF", 2),
+    ]
 
     actual_results = {}
-    for label, path in actual_runs.items():
+    for label, path, algo, day in actual_runs:
         if not os.path.exists(path):
             print(f"  {label}: file not found ({path})")
             continue
@@ -689,60 +695,114 @@ def main():
 
         # Per-belt item counts
         belt_counts = defaultdict(int)
+        shape_counts = defaultdict(int)
         for r in rows:
             belt_counts[r['belt']] += 1
+            shape_counts[r['shape']] += 1
+
+        # Inter-item gaps for throughput analysis
+        gaps = [rows[i+1]['time'] - rows[i]['time'] for i in range(len(rows)-1)]
+        avg_gap = sum(gaps) / len(gaps) if gaps else 0
+        median_gap = sorted(gaps)[len(gaps)//2] if gaps else 0
+
+        # Same-belt vs diff-belt gap analysis
+        same_gaps, diff_gaps = [], []
+        for i in range(len(rows)-1):
+            gap = rows[i+1]['time'] - rows[i]['time']
+            if rows[i+1]['belt'] == rows[i]['belt']:
+                same_gaps.append(gap)
+            else:
+                diff_gaps.append(gap)
 
         actual_results[label] = {
             'makespan': makespan,
             'first_item': first_item,
             'n_items': n_items,
             'belt_counts': dict(sorted(belt_counts.items())),
+            'shape_counts': dict(sorted(shape_counts.items())),
+            'avg_gap': avg_gap,
+            'median_gap': median_gap,
+            'same_belt_avg_gap': sum(same_gaps)/len(same_gaps) if same_gaps else 0,
+            'diff_belt_avg_gap': sum(diff_gaps)/len(diff_gaps) if diff_gaps else 0,
+            'throughput': n_items / makespan if makespan > 0 else 0,
+            'algo': algo,
+            'day': day,
         }
 
-    # Map actual runs to their simulated counterparts
+    # Map algorithms to simulated counterparts
     sim_map = {
-        "Liam (actual)":   "Liam (SA)",
-        "Jeevan (actual)": "Jeevan (SA)",
+        "SA":  ["Arkhan (SA)", "Liam (SA)", "Jeevan (SA)", "Kate (SA)"],
+        "SOF": ["Arkhan (SOF)"],
     }
 
-    hdr_act = (f"{'Run':<20s} | {'Items':>5s} | {'Makespan':>10s} | "
-               f"{'Sim Makespan':>12s} | {'Ratio':>6s} | {'Belt Distribution'}")
-    print(f"\n{hdr_act}")
-    print("-" * len(hdr_act) + "-" * 20)
+    print(f"\n  Day 1: Arkhan SA = Jeevan SA (same optimizer), Kate SA = Liam SA (same optimizer)")
+    print(f"  Day 2: Narrowed to SA vs SOF for final comparison\n")
 
-    for label in actual_runs:
+    hdr_act = (f"{'Run':<20s} | {'Items':>5s} | {'Makespan':>10s} | "
+               f"{'Throughput':>10s} | {'Avg Gap':>8s} | {'SameBelt':>8s} | "
+               f"{'DiffBelt':>8s} | {'Belt Distribution'}")
+    print(f"{hdr_act}")
+    print("-" * (len(hdr_act) + 10))
+
+    for label, path, algo, day in actual_runs:
         if label not in actual_results:
             continue
         ar = actual_results[label]
-        sim_name = sim_map.get(label, "")
-        sim_ms = results[sim_name]['jeevan']['makespan'] if sim_name in results else 0
-        ratio = sim_ms / ar['makespan'] if ar['makespan'] > 0 else 0
         belt_str = ", ".join(f"B{b}:{c}" for b, c in ar['belt_counts'].items())
         print(f"{label:<20s} | {ar['n_items']:>5d} | {ar['makespan']:>9.1f}s | "
-              f"{sim_ms:>11.1f}s | {ratio:>5.2f}x | {belt_str}")
+              f"{ar['throughput']:>8.3f}/s | {ar['avg_gap']:>7.1f}s | "
+              f"{ar['same_belt_avg_gap']:>7.1f}s | {ar['diff_belt_avg_gap']:>7.1f}s | "
+              f"{belt_str}")
 
-    print(f"\n  Note: actual runs had {total_items} items in problem but delivered "
-          f"fewer (no circles in physical totes)")
+    # Compare against simulated predictions
+    print(f"\n  Simulated vs Actual Makespan Comparison:")
+    print(f"  {'Run':<20s} | {'Actual':>10s} | {'Sim Best':>10s} | {'Error':>8s}")
+    print(f"  {'-'*60}")
+    for label, path, algo, day in actual_runs:
+        if label not in actual_results:
+            continue
+        ar = actual_results[label]
+        sim_names = sim_map.get(algo, [])
+        best_sim_ms = None
+        best_sim_name = ""
+        for sn in sim_names:
+            if sn in results:
+                ms = results[sn]['jeevan']['makespan']
+                if best_sim_ms is None or ms < best_sim_ms:
+                    best_sim_ms = ms
+                    best_sim_name = sn
+        if best_sim_ms is not None:
+            error_pct = abs(best_sim_ms - ar['makespan']) / ar['makespan'] * 100
+            print(f"  {label:<20s} | {ar['makespan']:>9.1f}s | {best_sim_ms:>9.1f}s | "
+                  f"{error_pct:>6.1f}%")
 
-    # -- 8. Export CSV ---------------------------------------------------
+    print(f"\n  Note: {total_items} items in problem; physical runs delivered fewer"
+          f" (no circles in physical totes)")
+
+    # -- 8. Export CSV (simulation results) --------------------------------
     csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'comparison_results.csv')
     with open(csv_path, 'w', newline='') as f:
         w = csv.writer(f)
-        w.writerow(['solution',
+        w.writerow(['solution', 'source',
                      'composite_score',
                      'makespan_sec', 'total_completion_time_sec',
                      'avg_completion_time_sec', 'wait_spread_sec',
                      'recirculation_events',
                      'kate_objective',
+                     'items_delivered', 'throughput_items_per_s',
+                     'avg_gap_sec', 'same_belt_avg_gap_sec', 'diff_belt_avg_gap_sec',
+                     'belt_balance_std',
                      'makespan_improvement_pct',
                      'composite_improvement_pct'])
+
+        # Simulated results
         for name in solutions:
             r = results[name]
             j = r['jeevan']
             ms_imp = (naive_ms - j['makespan']) / naive_ms * 100
             comp_imp = 100 - r['composite']
-            w.writerow([name,
+            w.writerow([name, 'simulation',
                         f"{r['composite']:.1f}",
                         f"{j['makespan']:.1f}",
                         f"{j['total_completion_time']:.1f}",
@@ -750,8 +810,28 @@ def main():
                         f"{r['spread']:.0f}",
                         j['recirculation_events'],
                         f"{r['kate_obj']:.1f}",
+                        total_items, '', '', '', '', '',
                         f"{ms_imp:.1f}",
                         f"{comp_imp:.1f}"])
+
+        # Physical run results
+        for label, path, algo, day in actual_runs:
+            if label not in actual_results:
+                continue
+            ar = actual_results[label]
+            counts = list(ar['belt_counts'].values())
+            belt_std = statistics.stdev(counts) if len(counts) > 1 else 0
+            w.writerow([f"{label} [{algo}]", 'physical',
+                        '', '',
+                        f"{ar['makespan']:.1f}",
+                        '', '', '', '',
+                        ar['n_items'],
+                        f"{ar['throughput']:.4f}",
+                        f"{ar['avg_gap']:.2f}",
+                        f"{ar['same_belt_avg_gap']:.2f}",
+                        f"{ar['diff_belt_avg_gap']:.2f}",
+                        f"{belt_std:.2f}",
+                        '', ''])
 
     print(f"\n  CSV saved to {csv_path}")
     print()
