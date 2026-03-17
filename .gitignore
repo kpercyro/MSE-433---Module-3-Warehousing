@@ -30,3 +30,13 @@ Thumbs.db
 
 # Generated output
 viz_data_*.json
+
+# Data files
+*.csv
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg

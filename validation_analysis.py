@@ -28,28 +28,28 @@ RUNS = [
         'label': 'Day 1 - Run A',
         'algo': 'SA',
         'day': 1,
-        'file': 'grp_3_run_1_a_Liam_SA.csv',
+        'file': os.path.join('data', 'physical_runs', 'grp_3_run_1_a_Liam_SA.csv'),
         'description': 'Simulated Annealing (Arkhan/Jeevan SA variant)',
     },
     {
         'label': 'Day 1 - Run B',
         'algo': 'SA',
         'day': 1,
-        'file': 'grp3_run_1_b_Arkhan_SA.csv',
+        'file': os.path.join('data', 'physical_runs', 'grp3_run_1_b_Arkhan_SA.csv'),
         'description': 'Simulated Annealing (same optimizer, re-run)',
     },
     {
         'label': 'Day 2 - Run A',
         'algo': 'SA',
         'day': 2,
-        'file': 'grp_3_run_2_a_Liam_SA.csv',
+        'file': os.path.join('data', 'physical_runs', 'grp_3_run_2_a_Liam_SA.csv'),
         'description': 'Simulated Annealing (final SA candidate)',
     },
     {
         'label': 'Day 2 - Run B',
         'algo': 'SOF',
         'day': 2,
-        'file': 'grp_3_run_2_b_Arkhan_SOF.csv',
+        'file': os.path.join('data', 'physical_runs', 'grp_3_run_2_b_Arkhan_SOF.csv'),
         'description': 'Shortest-Order-First heuristic (final SOF candidate)',
     },
 ]
@@ -370,7 +370,7 @@ def main():
     # ================================================================
     # 7. Export validation data as CSV
     # ================================================================
-    csv_path = os.path.join(_script_dir, 'validation_results.csv')
+    csv_path = os.path.join(_script_dir, 'results', 'comparison', 'validation_results.csv')
     with open(csv_path, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['run_label', 'algorithm', 'day', 'items_delivered', 'makespan_s',
